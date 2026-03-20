@@ -45,8 +45,8 @@ void PrintOutputTensor(const float* output, uint32_t batch_size, uint32_t n_head
 
 namespace llm {
 
-template<int seq_len, int d_k, int Br, int Bc>
-__global__ void flash_attention_v2_naive_fwd(
+template<int seq_len, int d_k, int Br, int Bc, int THREAD_WORKERS>
+__global__ void flash_attention_v2_warp_level_fwd(
     const float* __restrict__ Q,
     const float* __restrict__ K,
     const float* __restrict__ V,
@@ -55,10 +55,17 @@ __global__ void flash_attention_v2_naive_fwd(
   int batch_idx = blockIdx.y;
   int head_idx = blockIdx.z;
 
-  int tx = threadIdx.x;
+  constexpr int WARP_SIZE = 32;
+  constexpr int WARP_NUM = THREAD_WORKERS / WARP_SIZE;
+  constexpr int ROWS_PER_WARP = Br / WARP_NUM;
+  constexpr int COLS_PER_THREAD = d_k / WARP_SIZE;
+  static_assert(THREAD_WORKERS % WARP_SIZE == 0, "Threads must be multiple of 32");
+  static_assert(Br % WARP_NUM == 0, "Br must be divisible by WARP_NUM");
+  static_assert(d_k % WARP_SIZE == 0, "d_k must be divisible by 32");
 
-  int thread_workers = blockDim.x;
-  int q_tile_size = Br * d_k;
+  int tx = threadIdx.x;
+  int warp_id = tx / WARP_SIZE;
+  int lane_id = tx % WARP_SIZE;
 
   int qkv_offset = batch_idx * gridDim.z * seq_len * d_k + head_idx * seq_len * d_k;
   const float* q_block = Q + qkv_offset;
@@ -71,7 +78,8 @@ __global__ void flash_attention_v2_naive_fwd(
   float* v_shm = shm + Br * d_k + Bc * d_k;
 
   // Load q tile in shm.
-  for (int i = tx; i < q_tile_size; i += thread_workers) {
+  int q_tile_size = Br * d_k;
+  for (int i = tx; i < q_tile_size; i += THREAD_WORKERS) {
     int row = i / d_k;
     int col = i % d_k;
     q_shm[row * d_k + col] = 0.0f;
@@ -83,20 +91,24 @@ __global__ void flash_attention_v2_naive_fwd(
   }
   __syncthreads();
 
-  // One thread corresponds to one q row.
-  int global_q_row = q_tile_idx * Br + tx;
-  bool is_computed_thread = (tx < Br);
-  bool is_qrow_valid = is_computed_thread && (global_q_row < seq_len);
-
-  float m_row = -FLT_MAX;
-  float l_row = 0.0f;
-  float o_row[d_k] = {0.0f};
+  float m_row[ROWS_PER_WARP];
+  float l_row[ROWS_PER_WARP];
+  float o_row[ROWS_PER_WARP][COLS_PER_THREAD];
+  #pragma unroll
+  for (int r = 0; r < ROWS_PER_WARP; r++) {
+    m_row[r] = -FLT_MAX;
+    l_row[r] = 0.0f;
+    #pragma unroll
+    for (int c = 0; c < COLS_PER_THREAD; c++) {
+      o_row[r][c] = 0.0f;
+    }
+  }
 
   int num_kv_tile = (seq_len + Bc - 1) / Bc;
   int kv_tile_size = Bc * d_k;
   for (int kv_tile_idx = 0; kv_tile_idx < num_kv_tile; kv_tile_idx++) {
     // Load kv tile in shm.
-    for (int i = tx; i < kv_tile_size; i += thread_workers) {
+    for (int i = tx; i < kv_tile_size; i += THREAD_WORKERS) {
       int row = i / d_k;
       int col = i % d_k;
       int global_kv_row = kv_tile_idx * Bc + row;
@@ -110,25 +122,42 @@ __global__ void flash_attention_v2_naive_fwd(
     }
     __syncthreads();
 
-    if (is_qrow_valid) {
+    for (int r = 0; r < ROWS_PER_WARP; r++) {
+      int q_row_idx = warp_id * ROWS_PER_WARP + r;
+      int global_q_row = q_tile_idx * Br + q_row_idx;
+      if (global_q_row >= seq_len) {
+        continue;
+      }
+
       float m_tile = -FLT_MAX;
       float s_tile[Bc] = {0.0f};
+
       // Q @ K.T
       for (int k_row_idx = 0; k_row_idx < Bc; k_row_idx++) {
         int global_k_row = kv_tile_idx * Bc + k_row_idx;
         // Causal mask.
-        if (global_q_row < global_k_row) {
+        if (global_q_row < global_k_row || global_k_row >= seq_len) {
           s_tile[k_row_idx] = -FLT_MAX;
           continue;
         }
 
-        float s = 0.0f;
-        for (int d = 0; d < d_k; d++) {
-          s += q_shm[tx * d_k + d] * k_shm[k_row_idx * d_k + d];
+        float s_partial = 0.0f;
+        #pragma unroll
+        for (int c = 0; c < COLS_PER_THREAD; c++) {
+          int d = c * WARP_SIZE + lane_id;
+          s_partial += q_shm[q_row_idx * d_k + d] * k_shm[k_row_idx * d_k + d];
         }
+
+        unsigned mask = __activemask();
+        #pragma unroll
+        for (int offset = 16; offset > 0; offset /= 2) {
+          s_partial += __shfl_down_sync(mask, s_partial, offset);
+        }
+        float s = __shfl_sync(mask, s_partial, 0);
+
         s *= scale;
         s_tile[k_row_idx] = s;
-        m_tile = fmax(m_tile, s);
+        m_tile = fmaxf(m_tile, s);
       }
 
       // Softmax(Q @ K.T / scale)
@@ -140,31 +169,39 @@ __global__ void flash_attention_v2_naive_fwd(
       }
 
       // Online softmax update.
-      float m_new = fmax(m_row, m_tile);
-      float exp_m_prev = __expf(m_row - m_new);
+      float m_new = fmaxf(m_row[r], m_tile);
+      float exp_m_prev = __expf(m_row[r] - m_new);
       float exp_m_curr = __expf(m_tile - m_new);
-      float l_new = exp_m_curr * l_tile + exp_m_prev * l_row;
+      float l_new = exp_m_curr * l_tile + exp_m_prev * l_row[r];
 
       // O = S @ V
-      for (int d = 0; d < d_k; d++) {
+      #pragma unroll
+      for (int c = 0; c < COLS_PER_THREAD; c++) {
+        int d = c * WARP_SIZE + lane_id;
         float pv_sum = 0.0f;
         for (int v_row_idx = 0; v_row_idx < Bc; v_row_idx++) {
           pv_sum += s_tile[v_row_idx] * v_shm[v_row_idx * d_k + d];
         }
-        o_row[d] = exp_m_prev * o_row[d] + exp_m_curr * pv_sum;
+        o_row[r][c] = exp_m_prev * o_row[r][c] + exp_m_curr * pv_sum;
       }
 
-      m_row = m_new;
-      l_row = l_new;
+      m_row[r] = m_new;
+      l_row[r] = l_new;
     }
 
     __syncthreads();
   }
 
-  float* o_block_row = O + qkv_offset + global_q_row * d_k;
-  if (is_qrow_valid) {
-    for (int d = 0; d < d_k; d++) {
-      o_block_row[d] = o_row[d] / l_row;
+  for (int r = 0; r < ROWS_PER_WARP; r++) {
+    int q_row_idx = warp_id * ROWS_PER_WARP + r;
+    int global_q_row = q_tile_idx * Br + q_row_idx;
+    if (global_q_row < seq_len) {
+      float* O_ptr = O + qkv_offset + global_q_row * d_k;
+      #pragma unroll
+      for (int c = 0; c < COLS_PER_THREAD; c++) {
+        int d = c * WARP_SIZE + lane_id;
+        O_ptr[d] = o_row[r][c] / l_row[r];
+      }
     }
   }
 }
@@ -173,7 +210,7 @@ __global__ void flash_attention_v2_naive_fwd(
 
 int main(int argc, char* argv[]) {
   constexpr int seq_len = 128;
-  constexpr int d_model = 64;
+  constexpr int d_model = 128;
   constexpr int Br = 32;
   constexpr int Bc = 16;
 
@@ -234,7 +271,7 @@ int main(int argc, char* argv[]) {
   }
 
   int num_q_tile = (seq_len + Br - 1) / Br;
-  int thread_workers = 128;
+  constexpr int thread_workers = 128;
   dim3 grid(num_q_tile, batch_size, num_heads);
   dim3 block(thread_workers);
 
@@ -247,7 +284,7 @@ int main(int argc, char* argv[]) {
   printf("  block: %u\n", block.x);
   printf("  shared memory: %ld bytes\n", shared_mem_size);
 
-  llm::flash_attention_v2_naive_fwd<seq_len, d_k, Br, Bc>
+  llm::flash_attention_v2_warp_level_fwd<seq_len, d_k, Br, Bc, thread_workers>
       <<<grid, block, shared_mem_size>>>(Q, K, V, O, scale);
 
   cudaError_t err = cudaGetLastError();

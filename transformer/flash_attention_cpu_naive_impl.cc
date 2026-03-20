@@ -132,7 +132,7 @@ void self_attention_on_cpu(
 int main(int argc, char* argv[]) {
   constexpr uint32_t batch_size = 2u;
   constexpr uint32_t seq_len = 128u;
-  constexpr uint32_t d_model = 64;
+  constexpr uint32_t d_model = 128u;
   constexpr uint32_t n_head = 4u;
   constexpr uint32_t d_k = d_model / n_head;
 
