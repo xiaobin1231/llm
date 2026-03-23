@@ -79,6 +79,26 @@ __global__ void flash_attention_v2_warp_level_fwd(
 
   // Load q tile in shm.
   int q_tile_size = Br * d_k;
+#if __CUDA_ARCH__ >= 800
+  for (int i = tx; i < (q_tile_size / 4); i += THREAD_WORKERS) {
+    int row = i / (d_k / 4);
+    int col = (i % (d_k / 4)) * 4;
+
+    int global_q_row = q_tile_idx * Br + row;
+    int safe_global_q_row = (global_q_row < seq_len) ? global_q_row : 0;
+    int valid_bytes = (global_q_row < seq_len) ? 16 : 0;
+
+    unsigned smem_addr = static_cast<unsigned>(__cvta_generic_to_shared(&q_shm[row * d_k + col]));
+    const void* q_gmem_ptr = &q_block[safe_global_q_row * d_k + col];
+
+    asm volatile(
+      "cp.async.cg.shared.global [%0], [%1], 16, %2;\n"
+      :: "r"(smem_addr), "l"(q_gmem_ptr), "r"(valid_bytes)
+    );
+  }
+  asm volatile("cp.async.commit_group;\n" ::);
+  asm volatile("cp.async.wait_group 0;\n" ::);
+#else
   for (int i = tx; i < q_tile_size; i += THREAD_WORKERS) {
     int row = i / d_k;
     int col = i % d_k;
@@ -89,6 +109,7 @@ __global__ void flash_attention_v2_warp_level_fwd(
       q_shm[row * d_k + col] = q_block[global_q_row * d_k + col];
     }
   }
+#endif
   __syncthreads();
 
   float m_row[ROWS_PER_WARP];
@@ -108,6 +129,32 @@ __global__ void flash_attention_v2_warp_level_fwd(
   int kv_tile_size = Bc * d_k;
   for (int kv_tile_idx = 0; kv_tile_idx < num_kv_tile; kv_tile_idx++) {
     // Load kv tile in shm.
+#if __CUDA_ARCH__ >= 800
+    for (int i = tx; i < (kv_tile_size / 4); i += THREAD_WORKERS) {
+      int row = i / (d_k / 4);
+      int col = (i % (d_k / 4)) * 4;
+
+      int global_kv_row = kv_tile_idx * Bc + row;
+      int safe_global_kv_row = (global_kv_row < seq_len) ? global_kv_row : 0;
+      int valid_bytes = (global_kv_row < seq_len) ? 16 : 0;
+
+      unsigned k_smem_addr = static_cast<unsigned>(__cvta_generic_to_shared(&k_shm[row * d_k + col]));
+      const void* k_gmem_ptr = &k_block[safe_global_kv_row * d_k + col];
+      asm volatile(
+        "cp.async.cg.shared.global [%0], [%1], 16, %2;\n"
+        :: "r"(k_smem_addr), "l"(k_gmem_ptr), "r"(valid_bytes)
+      );
+
+      unsigned v_smem_addr = static_cast<unsigned>(__cvta_generic_to_shared(&v_shm[row * d_k + col]));
+      const void* v_gmem_ptr = &v_block[safe_global_kv_row * d_k + col];
+      asm volatile(
+        "cp.async.cg.shared.global [%0], [%1], 16, %2;\n"
+        :: "r"(v_smem_addr), "l"(v_gmem_ptr), "r"(valid_bytes)
+      );
+    }
+    asm volatile("cp.async.commit_group;\n" ::);
+    asm volatile("cp.async.wait_group 0;\n" ::);
+#else
     for (int i = tx; i < kv_tile_size; i += THREAD_WORKERS) {
       int row = i / d_k;
       int col = i % d_k;
@@ -120,6 +167,7 @@ __global__ void flash_attention_v2_warp_level_fwd(
         v_shm[row * d_k + col] = v_block[global_kv_row * d_k + col];
       }
     }
+#endif
     __syncthreads();
 
     for (int r = 0; r < ROWS_PER_WARP; r++) {
