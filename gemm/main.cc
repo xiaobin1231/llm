@@ -1,5 +1,7 @@
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+
 #include "gemm/launch_template.h"
 
 namespace {
@@ -20,25 +22,54 @@ int main(int argc, char* argv[]) {
   constexpr std::size_t N = 4096u;
   constexpr std::size_t K = 2048u;
 
-  float* MatrixA = static_cast<float*>(malloc(M * K * sizeof(float)));
-  InitializeMatrix(MatrixA, M * K, -1, 1);
-  float* MatrixB = static_cast<float*>(malloc(K * N * sizeof(float)));
-  InitializeMatrix(MatrixB, K * N, -1, 1);
-  float* MatrixC = static_cast<float*>(malloc(M * N * sizeof(float)));
-  InitializeMatrix(MatrixC, M * N, -1, 1);
+  using scalar_t = float;
+
+  scalar_t* h_A = static_cast<scalar_t*>(malloc(M * K * sizeof(scalar_t)));
+  InitializeMatrix(h_A, M * K, -1, 1);
+  scalar_t* h_B = static_cast<scalar_t*>(malloc(K * N * sizeof(scalar_t)));
+  InitializeMatrix(h_B, K * N, -1, 1);
+
+  scalar_t* h_C_cpu = static_cast<scalar_t*>(malloc(M * N * sizeof(scalar_t)));
+  scalar_t* h_C_gpu = static_cast<scalar_t*>(malloc(M * N * sizeof(scalar_t)));
+
+  scalar_t* d_A;
+  scalar_t* d_B;
+  scalar_t* d_C;
+  cudaMalloc(&d_A, M * K * sizeof(scalar_t));
+  cudaMalloc(&d_B, K * N * sizeof(scalar_t));
+  cudaMalloc(&d_C, M * N * sizeof(scalar_t));
+  cudaMemset(&d_C, 0, M * N * sizeof(scalar_t));
+
+  cudaMemcpy(d_A, h_A, M * K * sizeof(scalar_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_B, h_B, K * N * sizeof(scalar_t), cudaMemcpyHostToDevice);
 
   gemm::MatrixDim dim(M, N, K);
-  gemm::GemmExec<float, gemm::k_naive_cpu_impl>(dim, MatrixA, MatrixB, MatrixC);
+  gemm::GemmExec<scalar_t, gemm::k_naive_cpu_impl>(dim, h_A, h_B, h_C_cpu);
 
-  printf("MatrixC[0]:\n");
+  gemm::GemmExec<scalar_t, gemm::k_naive_cuda_impl>(dim, d_A, d_B, d_C);
+  cudaDeviceSynchronize();
+  cudaMemcpy(h_C_gpu, d_C, M * N * sizeof(scalar_t), cudaMemcpyDeviceToHost);
+
+  bool match = true;
   for (std::size_t n = 0u; n < N; n++) {
-    printf("%.2f, ", MatrixC[n]);
+    if (std::fabs(h_C_cpu[n] - h_C_gpu[n]) >= 1e-4) {
+      match = false;
+    }
   }
-  printf("\n");
 
-  free(MatrixA);
-  free(MatrixB);
-  free(MatrixC);
+  if (match) {
+    printf("Gpu and Cpu result are matched.\n");
+  } else {
+    printf("Gpu and Cpu result not match.\n");
+  }
+
+  free(h_A);
+  free(h_B);
+  free(h_C_cpu);
+  free(h_C_gpu);
+  cudaFree(d_A);
+  cudaFree(d_B);
+  cudaFree(d_C);
 
   return 0;
 }

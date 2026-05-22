@@ -1,6 +1,8 @@
-#include <cstdlib>
+#ifndef GEMM_LAUNCH_TEMPLATE_H_
+#define GEMM_LAUNCH_TEMPLATE_H_
 
-#include "gemm/kernel_impl.h"
+#include <cstdlib>
+#include <cuda_runtime.h>
 
 namespace gemm {
 
@@ -37,6 +39,8 @@ void GemmCpuImpl(const MatrixDim& dim, const scalar_t* A, const scalar_t* B, sca
 }
 
 template<typename scalar_t, GemmImplOperation op>
-void GemmExec(const MatrixDim& dim, const scalar_t* A, const scalar_t* B, scalar_t* C);
+void GemmExec(const MatrixDim& dim, const scalar_t* A, const scalar_t* B, scalar_t* C, cudaStream_t stream = nullptr);
 
 }  // namespace gemm
+
+#endif  // GEMM_LAUNCH_TEMPLATE_H_
