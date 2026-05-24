@@ -44,16 +44,19 @@ int main(int argc, char* argv[]) {
   cudaMemcpy(d_B, h_B, K * N * sizeof(scalar_t), cudaMemcpyHostToDevice);
 
   gemm::MatrixDim dim(M, N, K);
-  gemm::GemmExec<scalar_t, gemm::k_naive_cpu_impl>(dim, h_A, h_B, h_C_cpu);
 
   gemm::GemmExec<scalar_t, gemm::k_naive_cuda_impl>(dim, d_A, d_B, d_C);
+
   cudaDeviceSynchronize();
   cudaMemcpy(h_C_gpu, d_C, M * N * sizeof(scalar_t), cudaMemcpyDeviceToHost);
+
+  gemm::GemmExec<scalar_t, gemm::k_naive_cpu_impl>(dim, h_A, h_B, h_C_cpu);
 
   bool match = true;
   for (std::size_t n = 0u; n < N; n++) {
     if (std::fabs(h_C_cpu[n] - h_C_gpu[n]) >= 1e-4) {
       match = false;
+      break;
     }
   }
 
