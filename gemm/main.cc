@@ -10,9 +10,14 @@ inline float RandUniform(float low, float high) {
   return low + r * (high - low);
 }
 
-void InitializeMatrix(float* data, size_t n, float low, float high) {
-  for (size_t i = 0; i < n; i++) {
+void InitializeMatrix(float* data, std::size_t n, float low, float high) {
+  for (std::size_t i = 0; i < n; i++) {
     data[i] = RandUniform(low, high);
+  }
+}
+void InitializeMatrixWithFP32(half* dst, float* src, std::size_t n) {
+  for (std::size_t i = 0; i < n; i++) {
+    dst[i] = __float2half(src[i]);
   }
 }
 }  // namespace
@@ -22,39 +27,51 @@ int main(int argc, char* argv[]) {
   constexpr std::size_t N = 4096u;
   constexpr std::size_t K = 2048u;
 
-  using scalar_t = float;
+  // FP32
+  float* host_fp32_A = static_cast<float*>(malloc(M * K * sizeof(float)));
+  InitializeMatrix(host_fp32_A, M * K, -1.0f, 1.0f);
+  float* host_fp32_B = static_cast<float*>(malloc(K * N * sizeof(float)));
+  InitializeMatrix(host_fp32_B, K * N, -1.0f, 1.0f);
 
-  scalar_t* h_A = static_cast<scalar_t*>(malloc(M * K * sizeof(scalar_t)));
-  InitializeMatrix(h_A, M * K, -1, 1);
-  scalar_t* h_B = static_cast<scalar_t*>(malloc(K * N * sizeof(scalar_t)));
-  InitializeMatrix(h_B, K * N, -1, 1);
+  float* device_fp32_A;
+  float* device_fp32_B;
+  cudaMalloc(&device_fp32_A, M * K * sizeof(float));
+  cudaMalloc(&device_fp32_B, K * N * sizeof(float));
+  cudaMemcpy(device_fp32_A, host_fp32_A, M * K * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpy(device_fp32_B, host_fp32_B, K * N * sizeof(float), cudaMemcpyHostToDevice);
 
-  scalar_t* h_C_cpu = static_cast<scalar_t*>(malloc(M * N * sizeof(scalar_t)));
-  scalar_t* h_C_gpu = static_cast<scalar_t*>(malloc(M * N * sizeof(scalar_t)));
+  // FP16
+  half* host_fp16_A = static_cast<half*>(malloc(M * K * sizeof(half)));
+  InitializeMatrixWithFP32(host_fp16_A, host_fp32_A, M * K);
+  half* host_fp16_B = static_cast<half*>(malloc(K * N * sizeof(half)));
+  InitializeMatrixWithFP32(host_fp16_B, host_fp32_B, K * N);
 
-  scalar_t* d_A;
-  scalar_t* d_B;
-  scalar_t* d_C;
-  cudaMalloc(&d_A, M * K * sizeof(scalar_t));
-  cudaMalloc(&d_B, K * N * sizeof(scalar_t));
-  cudaMalloc(&d_C, M * N * sizeof(scalar_t));
-  cudaMemset(&d_C, 0, M * N * sizeof(scalar_t));
+  half* device_fp16_A;
+  half* device_fp16_B;
+  cudaMalloc(&device_fp16_A, M * K * sizeof(half));
+  cudaMalloc(&device_fp16_B, K * N * sizeof(half));
+  cudaMemcpy(device_fp16_A, host_fp16_A, M * K * sizeof(half), cudaMemcpyHostToDevice);
+  cudaMemcpy(device_fp16_B, host_fp16_B, K * N * sizeof(half), cudaMemcpyHostToDevice);
 
-  cudaMemcpy(d_A, h_A, M * K * sizeof(scalar_t), cudaMemcpyHostToDevice);
-  cudaMemcpy(d_B, h_B, K * N * sizeof(scalar_t), cudaMemcpyHostToDevice);
+  float* d_C;
+  cudaMalloc(&d_C, M * N * sizeof(float));
+  cudaMemset(d_C, 0, M * N * sizeof(float));
 
   gemm::MatrixDim dim(M, N, K);
 
-  gemm::GemmExec<scalar_t, gemm::k_naive_cuda_impl>(dim, d_A, d_B, d_C);
+  // gemm::GemmExec<float, float, gemm::k_naive_cuda_impl>(dim, device_fp32_A, device_fp32_B, d_C);
+  gemm::GemmExec<half, float, gemm::k_tensor_core_mma_impl>(dim, device_fp16_A, device_fp16_B, d_C);
+
+  float* h_C_cpu = static_cast<float*>(malloc(M * N * sizeof(float)));
+  gemm::GemmExec<float, float, gemm::k_naive_cpu_impl>(dim, host_fp32_A, host_fp32_B, h_C_cpu);
 
   cudaDeviceSynchronize();
-  cudaMemcpy(h_C_gpu, d_C, M * N * sizeof(scalar_t), cudaMemcpyDeviceToHost);
-
-  gemm::GemmExec<scalar_t, gemm::k_naive_cpu_impl>(dim, h_A, h_B, h_C_cpu);
+  float* h_C_gpu = static_cast<float*>(malloc(M * N * sizeof(float)));
+  cudaMemcpy(h_C_gpu, d_C, M * N * sizeof(float), cudaMemcpyDeviceToHost);
 
   bool match = true;
   for (std::size_t n = 0u; n < N; n++) {
-    if (std::fabs(h_C_cpu[n] - h_C_gpu[n]) >= 1e-4) {
+    if (std::fabs(h_C_cpu[n] - h_C_gpu[n]) >= 5e-2) {
       match = false;
       break;
     }
@@ -66,12 +83,16 @@ int main(int argc, char* argv[]) {
     printf("Gpu and Cpu result not match.\n");
   }
 
-  free(h_A);
-  free(h_B);
+  free(host_fp32_A);
+  free(host_fp32_B);
+  free(host_fp16_A);
+  free(host_fp16_B);
   free(h_C_cpu);
   free(h_C_gpu);
-  cudaFree(d_A);
-  cudaFree(d_B);
+  cudaFree(device_fp32_A);
+  cudaFree(device_fp32_B);
+  cudaFree(device_fp16_A);
+  cudaFree(device_fp16_B);
   cudaFree(d_C);
 
   return 0;
