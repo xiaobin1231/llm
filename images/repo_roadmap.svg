@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 540" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="dir_fa" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#79c0ff"/>
+      <stop offset="100%" stop-color="#58a6ff"/>
+    </linearGradient>
+    <linearGradient id="dir_gemm" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7ee787"/>
+      <stop offset="100%" stop-color="#56d364"/>
+    </linearGradient>
+    <linearGradient id="dir_docs" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#d2a8ff"/>
+      <stop offset="100%" stop-color="#a371f7"/>
+    </linearGradient>
+    <linearGradient id="file_impl" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#21262d"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+
+  <rect width="800" height="540" fill="url(#bg)" rx="8"/>
+
+  <text x="400" y="32" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="700" font-family="system-ui, sans-serif">Project Structure</text>
+
+  <!-- ======================== flash_attn ======================== -->
+  <rect x="30" y="52" width="360" height="32" rx="5" fill="url(#dir_fa)" filter="url(#shadow)"/>
+  <text x="40" y="74" fill="#0d1117" font-size="13" font-weight="700">flash_attn/</text>
+
+  <rect x="30" y="96" width="360" height="28" rx="4" fill="url(#file_impl)" stroke="#30363d" stroke-width="0.8"/>
+  <text x="42" y="115" fill="#c9d1d9" font-size="12">flash_attention_cpu_naive_impl.cc</text>
+
+  <rect x="30" y="132" width="360" height="28" rx="4" fill="url(#file_impl)" stroke="#30363d" stroke-width="0.8"/>
+  <text x="42" y="151" fill="#c9d1d9" font-size="12">flash_attention_v1_naive_impl.cu</text>
+
+  <rect x="30" y="168" width="360" height="28" rx="4" fill="url(#file_impl)" stroke="#30363d" stroke-width="0.8"/>
+  <text x="42" y="187" fill="#c9d1d9" font-size="12">flash_attention_v2_naive_impl.cu</text>
+
+  <rect x="30" y="204" width="360" height="28" rx="4" fill="url(#file_impl)" stroke="#30363d" stroke-width="0.8"/>
+  <text x="42" y="223" fill="#c9d1d9" font-size="12">flash_attention_v2_performance_impl.cu</text>
+
+  <text x="30" y="254" fill="#58a6ff" font-size="11" font-family="system-ui, sans-serif">CPU naive → V1 tiling → V2 online softmax</text>
+  <text x="30" y="270" fill="#58a6ff" font-size="11" font-family="system-ui, sans-serif">→ V2 perf: warp-level reduction, cp.async, vectorized loads</text>
+
+  <!-- ======================== gemm ======================== -->
+  <rect x="410" y="52" width="360" height="32" rx="5" fill="url(#dir_gemm)" filter="url(#shadow)"/>
+  <text x="420" y="74" fill="#0d1117" font-size="13" font-weight="700">gemm/</text>
+
+  <rect x="410" y="96" width="360" height="28" rx="4" fill="url(#file_impl)" stroke="#30363d" stroke-width="0.8"/>
+  <text x="422" y="115" fill="#c9d1d9" font-size="12">naive_cpu.cc</text>
+
+  <rect x="410" y="132" width="360" height="28" rx="4" fill="url(#file_impl)" stroke="#30363d" stroke-width="0.8"/>
+  <text x="422" y="151" fill="#c9d1d9" font-size="12">naive_cuda.cu</text>
+
+  <rect x="410" y="168" width="360" height="28" rx="4" fill="url(#file_impl)" stroke="#30363d" stroke-width="0.8"/>
+  <text x="422" y="187" fill="#c9d1d9" font-size="12">mma.cu               PTX mma.sync inline asm</text>
+
+  <rect x="410" y="204" width="360" height="28" rx="4" fill="url(#file_impl)" stroke="#484f58" stroke-width="0.8"/>
+  <text x="422" y="223" fill="#8b949e" font-size="12">wmma.cu              CUDA WMMA API (wip)</text>
+
+  <rect x="410" y="240" width="360" height="28" rx="4" fill="url(#file_impl)" stroke="#484f58" stroke-width="0.8"/>
+  <text x="422" y="259" fill="#8b949e" font-size="12">wgmma.cu             SM90+ async WGMMA (wip)</text>
+
+  <rect x="410" y="276" width="360" height="28" rx="4" fill="url(#file_impl)" stroke="#484f58" stroke-width="0.8"/>
+  <text x="422" y="295" fill="#8b949e" font-size="12">cute.cu              CUTLASS CuTe (wip)</text>
+
+  <rect x="410" y="312" width="360" height="28" rx="4" fill="url(#file_impl)" stroke="#484f58" stroke-width="0.8"/>
+  <text x="422" y="331" fill="#8b949e" font-size="12">multi_stage_cute.cu  multi-stage pipeline (wip)</text>
+
+  <text x="410" y="366" fill="#56d364" font-size="11" font-family="system-ui, sans-serif">naive → mma → wmma → wgmma → cute → multi-stage pipeline</text>
+
+  <!-- ======================== docs ======================== -->
+  <line x1="30" y1="400" x2="770" y2="400" stroke="#21262d" stroke-width="1"/>
+
+  <rect x="30" y="418" width="360" height="32" rx="5" fill="url(#dir_docs)" filter="url(#shadow)"/>
+  <text x="40" y="440" fill="#0d1117" font-size="13" font-weight="700">docs/</text>
+
+  <rect x="30" y="462" width="360" height="28" rx="4" fill="url(#file_impl)" stroke="#30363d" stroke-width="0.8"/>
+  <text x="42" y="481" fill="#c9d1d9" font-size="12">mma_zh.md            MMA 实现详解</text>
+
+  <!-- Legend -->
+  <rect x="430" y="425" width="8" height="8" rx="2" fill="#30363d" stroke="#484f58" stroke-width="0.6"/>
+  <text x="445" y="433" fill="#8b949e" font-size="10" font-family="system-ui, sans-serif">implemented</text>
+  <rect x="540" y="425" width="8" height="8" rx="2" fill="#484f58" opacity="0.5"/>
+  <text x="555" y="433" fill="#8b949e" font-size="10" font-family="system-ui, sans-serif">wip</text>
+</svg>

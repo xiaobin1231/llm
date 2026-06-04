@@ -1,19 +1,108 @@
-# Background
-As for me, writing implementations of FlashAttention from scratch is a highly commendable and challenging engineering exercise!
+# LLM Kernel Lab
 
-# Introduction
-## [self_attention_cpu_naive_impl](https://github.com/xiaobin1231/llm/blob/main/transformer/self_attention_cpu_naive_impl.cc)
+> FlashAttention · GEMM · CUDA · Tensor Core · CUTLASS · CuTe
 
-## [flash_attention_v1_naive_impl.cu](https://github.com/xiaobin1231/llm/blob/main/transformer/flash_attention_v1_naive_impl.cu)
-This implementation has significant bottlenecks regarding hardware utilization and flexibility. Here is a detailed breakdown of why this code struggles with performance and generality.
-- Uncoalesced Global Memory Access: Threads (tx) iterate over matrix rows while the loop variable (d) iterates over columns. This strided memory access pattern prevents the warp from loading contiguous chunks of memory simultaneously, severely bottlenecking global memory bandwidth.
+A personal learning and experimentation repository focused on high-performance CUDA kernels, including FlashAttention, GEMM, Tensor Core programming, CUTLASS, CuTe, and modern GPU optimization techniques.
 
-- Extremely Low Block Occupancy: Kernel configuration uses exactly 32 threads per block (dim3 block(Br) where Br = 32), which equals a single warp. GPU performance relies heavily on latency hiding—switching to other active warps when one is waiting for memory. With only one warp per block, the Streaming Multiprocessor (SM) sits completely idle during memory stalls.
+🇨🇳 **中文版本：** [README_zh.md](./README_zh.md)
 
-- Absence of Tensor Core Utilization: The matrix multiplications (Q @ K.T and S @ V) are implemented using standard scalar FMA (Fused Multiply-Add) operations in nested for loops. Modern GPUs achieve peak deep learning throughput via Tensor Cores, which require specialized warp-level matrix multiply-accumulate (wmma) instructions or NVIDIA's CuTe library.
+---
 
-- Shared Memory Bank Conflicts: Accessing shared memory with a stride that is a multiple of 32 (like your d_k = 64) causes multiple threads in a warp to hit the same memory bank simultaneously. This forces the hardware to serialize the memory requests, drastically reducing shared memory throughput.
+# The Road to Mastering Performance Is Muddy, but My Passion Remains
 
-- Rigid Thread-to-Dimension Coupling: Tying the block size strictly to the tile size (Br == blockDim.x) removes the flexibility to tune thread counts independently for maximum occupancy. Furthermore, the code assumes seq_len is perfectly divisible by Br and Bc, which will cause out-of-bounds memory access (and likely a core dump) for arbitrary or unpadded sequence lengths.
+## Introduction
 
-- Strict FP32 Precision
+Performance optimization is a vast topic.
+
+Making a program work is relatively easy. Making it run efficiently and fully utilize modern hardware is a completely different challenge.
+
+In my view, performance optimization can be understood through three layers.
+
+### Hardware
+
+Understanding hardware is the foundation of optimization.
+
+General-purpose operators can achieve decent performance, but they rarely outperform implementations specifically designed for a target architecture. As algorithms mature and ecosystems stabilize, specialized accelerators and ASICs inevitably become the next step forward.
+
+### Systems
+
+If hardware provides computational power, system architecture determines how that power is utilized.
+
+Modern AI systems are inherently heterogeneous. CPUs, GPUs, NPUs, and memory subsystems must work together efficiently. The challenge is not merely executing workloads, but orchestrating resources to maximize throughput while minimizing latency.
+
+The value of system design is not simply making models run, but making them serve users efficiently.
+
+### Algorithms and Models
+
+Algorithms ultimately define the upper bound.
+
+Model architecture, parameter count, quantization precision, pruning strategies, and distillation techniques all involve trade-offs.
+
+Achieving high accuracy with low-precision computation remains one of the most challenging goals in modern AI systems.
+
+---
+
+## Why FlashAttention
+
+The first time I read the FlashAttention paper, what impressed me most was not the speedup itself, but the depth of engineering behind it.
+
+Online Softmax is an algorithmic innovation.
+
+Multi-stage pipelining is a systems optimization.
+
+Tensor Core and TMA utilization require deep understanding of GPU hardware.
+
+FlashAttention is not a single optimization technique. It is a rare example of algorithm, system, and hardware co-design.
+
+Reading papers and studying source code can teach concepts, but true understanding comes from implementation.
+
+> What I hear, I may forget.
+> What I see, I may remember.
+> What I do, I understand.
+
+This repository was created to walk that path myself.
+
+Here I document my experiments, implementations, and thoughts on CUDA, GEMM, FlashAttention, and modern GPU optimization techniques.
+
+---
+
+## Project Structure
+
+<div align="center">
+  <img src="./images/repo_roadmap.svg" alt="Learning Roadmap" width="100%"/>
+</div>
+
+### 🐭 FlashAttention
+
+Implementations and experiments exploring modern attention kernels, from basic versions to highly optimized designs.
+
+👉 [Enter FlashAttention](./flash_attn/README.md)
+
+### 🐭 GEMM
+
+Matrix multiplication kernels, Tensor Core programming, CUDA optimization techniques, CUTLASS, and CuTe.
+
+👉 [Enter GEMM](./gemm/README.md)
+
+---
+
+## Goals
+
+This repository is not intended to become a production-ready framework.
+
+Instead, it serves as a place to understand and reproduce the ideas behind:
+
+* FlashAttention
+* GEMM optimization
+* Tensor Core programming
+* CUDA kernel optimization
+* CUTLASS / CuTe
+* Modern GPU architectures
+
+The goal is not only to know *what* these techniques are, but also to understand *why* they work.
+
+---
+
+If these experiments help someone learn GPU optimization a little faster, then this repository has already achieved more than I expected.
+
+And hopefully, I never lose the passion that brought me here in the first place.
